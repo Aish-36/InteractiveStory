@@ -1,0 +1,25 @@
+# Git Ignore File 
+# Ignore environment variables (in case .env is created later)
+.env
+
+# Ignore system files
+__pycache__/
+.DS_Store
+
+# Ignore dataset-related generated files
+data/temp/
+data/videos/
+data/audio/
+
+# Ignore compiled Python files
+*.pyc
+*.pyo
+*.pyd
+
+# Ignore logs and checkpoints (if any)
+logs/
+checkpoints/
+
+# Ignore Jupyter Notebook checkpoints (if you use notebooks)
+.ipynb_checkpoints/
+
