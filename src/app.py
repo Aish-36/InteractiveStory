@@ -1,7 +1,11 @@
 import streamlit as st
 import os
 import cv2
+from streamlit_webrtc import webrtc_streamer, WebRtcMode, AudioProcessorBase
 import tempfile
+import av
+import speech_recognition as sr
+from pydub import AudioSegment
 import numpy as np
 from gtts import gTTS
 from pathlib import Path
@@ -13,22 +17,23 @@ import shutil
 import subprocess
 from deep_translator import GoogleTranslator
 
+
 class StorySignConverter:
     def __init__(self):
         # Set up logging
         logging.basicConfig(level=logging.INFO)
         self.logger = logging.getLogger(__name__)
-        
+
         # Create necessary directories
         self.base_dir = Path.cwd()
         self.videos_dir = self.base_dir / "videos"
         self.temp_dir = self.base_dir / "temp"
-        
+
         # Create directories if they don't exist
         for directory in [self.videos_dir, self.temp_dir]:
             directory.mkdir(exist_ok=True)
             self.logger.info(f"Directory created/verified at: {directory.absolute()}")
-        
+
         # Initialize app
         self.setup_page()
         self.init_session_state()
@@ -38,11 +43,11 @@ class StorySignConverter:
     def setup_page(self):
         """Setup page configuration and styling"""
         st.set_page_config(page_title="Interactive Story Signing", layout="wide")
-        
+
         # Initialize theme if not in session state
         if 'theme' not in st.session_state:
             st.session_state.theme = 'light'
-        
+
         # Apply CSS styling
         self.apply_styling()
 
@@ -53,12 +58,12 @@ class StorySignConverter:
             <style>
                 {theme_css}
                 @import url('https://fonts.googleapis.com/css2?family=Poppins:wght@400;600&display=swap');
-                
+
                 .stApp {{
                     font-family: 'Poppins', sans-serif;
                     background-color: var(--background-color);
                 }}
-                
+
                 .main-title {{
                     text-align: center;
                     padding: 2rem;
@@ -70,7 +75,7 @@ class StorySignConverter:
                     -webkit-background-clip: text;
                     -webkit-text-fill-color: transparent;
                 }}
-                
+
                 .story-container {{
                     background-color: var(--card-bg);
                     padding: 2rem;
@@ -78,14 +83,14 @@ class StorySignConverter:
                     box-shadow: 0 4px 6px rgba(0, 0, 0, 0.1);
                     margin: 2rem 0;
                 }}
-                
+
                 .controls-container {{
                     display: flex;
                     justify-content: center;
                     gap: 2rem;
                     margin: 2rem 0;
                 }}
-                
+
                 .custom-button {{
                     background-color: var(--button-bg);
                     color: var(--button-text);
@@ -96,12 +101,12 @@ class StorySignConverter:
                     transition: all 0.3s ease;
                     font-weight: 600;
                 }}
-                
+
                 .custom-button:hover {{
                     transform: scale(1.05);
                     background-color: var(--hover-color);
                 }}
-                
+
                 .status-message {{
                     padding: 1rem;
                     border-radius: 8px;
@@ -178,14 +183,15 @@ class StorySignConverter:
             st.session_state.video_paths = []
         if 'selected_language' not in st.session_state:
             st.session_state.selected_language = 'en'
+
     def load_resources(self):
         """Load image and GIF resources"""
         self.resources = {}
-        
+
         # Define paths - update these to your actual paths
         image_dir = Path("Images")  # Directory for static images
-        gif_dir = Path("Gifs")      # Directory for GIFs
-        
+        gif_dir = Path("Gifs")  # Directory for GIFs
+
         # Load static images
         if image_dir.exists():
             for ext in ['.jpeg', '.jpg', '.png']:
@@ -220,7 +226,7 @@ class StorySignConverter:
                 frame_array = np.array(frame)
                 frames.append(frame_array)
         return frames
-    
+
     def create_video(self, words_list, sentence_index):
         """Create video from list of words, where each word's images are shown in one frame"""
         if not words_list:
@@ -232,7 +238,7 @@ class StorySignConverter:
         BASE_IMAGE_HEIGHT = 240  # Base individual image height
         FRAME_RATE = 24
         STATIC_DURATION = 2  # seconds to show static images
-        
+
         # Create unique video filename
         video_filename = f"sentence_{sentence_index}_{int(time.time())}.mp4"
         output_path = self.videos_dir / video_filename
@@ -256,7 +262,8 @@ class StorySignConverter:
                 # Adjust image width if word is too long to fit in one row
                 if num_images * BASE_IMAGE_WIDTH + (num_images - 1) * space_between > max_allowed_width:
                     IMAGE_WIDTH = max_allowed_width // num_images
-                    space_between = (max_allowed_width - num_images * IMAGE_WIDTH) // (num_images - 1) if num_images > 1 else 0
+                    space_between = (max_allowed_width - num_images * IMAGE_WIDTH) // (
+                                num_images - 1) if num_images > 1 else 0
                 else:
                     IMAGE_WIDTH = BASE_IMAGE_WIDTH
 
@@ -349,8 +356,6 @@ class StorySignConverter:
         except Exception as e:
             self.logger.error(f"Error creating video: {str(e)}")
             return None
-        
-        
 
     def generate_audio(self, text):
         """Generate audio file from text"""
@@ -364,13 +369,13 @@ class StorySignConverter:
             return None
 
     def process_story(self, text):
-        
+
         """Process story text into signs, videos, and audio"""
-      
-            # Translate text to English if not already in English
+
+        # Translate text to English if not already in English
         if st.session_state.selected_language != 'en':
             self.translator = GoogleTranslator(
-                source=st.session_state.selected_language, 
+                source=st.session_state.selected_language,
                 target='en'
             )
             text_for_signs = self.translator.translate(text)
@@ -381,35 +386,35 @@ class StorySignConverter:
         sentences = [s.strip() for s in text.split('.') if s.strip()]
         video_paths = []
         audio_files = []
-        
+
         for i, sentence in enumerate(sentences):
             # Generate audio
             audio_file = self.generate_audio(sentence)
             if audio_file:
                 audio_files.append(audio_file)
-            
+
             # Process sentence into words
             words = []
             for word in sentence.split():
                 word = ''.join(c for c in word if c.isalnum())
                 if any(c.upper() in self.resources for c in word):
                     words.append(word)
-            
+
             # Create video
             video_path = self.create_video(words, i)
             if video_path:
                 video_paths.append(video_path)
-        
+
         st.session_state.video_paths = video_paths
         st.session_state.audio_files = audio_files
         st.session_state.current_index = 0
-        
+
     def add_download_button(self):
         """Add a download button for the complete story"""
         if st.session_state.video_paths and st.session_state.audio_files:
             st.markdown('<div class="story-container">', unsafe_allow_html=True)
             col1, col2, col3 = st.columns([1, 2, 1])
-            
+
             with col2:
                 if st.button("⬇️ Download Complete Story", key="download_story"):
                     with st.spinner("Preparing your story..."):
@@ -426,9 +431,9 @@ class StorySignConverter:
                             st.success("Your story is ready for download!")
                         else:
                             st.error("Failed to prepare the story for download.")
-            
+
             st.markdown('</div>', unsafe_allow_html=True)
-   
+
     def display_video_with_audio(self):
         def convert_video(input_path, output_path):
             try:
@@ -448,43 +453,43 @@ class StorySignConverter:
                 print(f"Error converting video: {e}")
                 return False
 
-    
         try:
             video_path = st.session_state.video_paths[st.session_state.current_index]
             audio_path = st.session_state.audio_files[st.session_state.current_index]
-            
+
             print(f"Attempting to load video from: {video_path}")
             print(f"Attempting to load audio from: {audio_path}")
-            
+
             if os.path.exists(video_path):
                 file_size = os.path.getsize(video_path)
                 print(f"Video file size: {file_size} bytes")
-                
+
                 converted_path = video_path.replace('.mp4', '_converted.mp4')
-                
+
                 # Remove existing converted file if it exists
                 if os.path.exists(converted_path):
                     os.remove(converted_path)
-                    
+
                 if convert_video(video_path, converted_path):
                     with open(converted_path, 'rb') as video_file:
                         video_bytes = video_file.read()
                     st.video(video_bytes)
-                    
+
                     # Clean up converted file after displaying
                     if os.path.exists(converted_path):
                         os.remove(converted_path)
             else:
                 st.error(f"Video file not found at: {video_path}")
-                
+
             if os.path.exists(audio_path):
                 st.audio(audio_path)
             else:
                 st.error(f"Audio file not found at: {audio_path}")
-                
+
         except Exception as e:
             st.error(f"Error loading media: {str(e)}")
             print(f"Detailed error: {e}")
+
     def combine_videos_and_audio(self):
         try:
             temp_file_list = self.temp_dir / "file_list.txt"
@@ -558,37 +563,38 @@ class StorySignConverter:
         except Exception as e:
             self.logger.error(f"Error combining videos and audio: {str(e)}")
             return None
+
     def display_navigation(self):
         """Display navigation controls"""
         col1, col2, col3 = st.columns([1, 2, 1])
-        
+
         with col1:
-            if st.button("◀ Previous", 
-                        disabled=st.session_state.current_index == 0,
-                        key="prev_button"):
+            if st.button("◀ Previous",
+                         disabled=st.session_state.current_index == 0,
+                         key="prev_button"):
                 st.session_state.current_index -= 1
-        
+
         with col2:
             total = len(st.session_state.video_paths)
             st.markdown(
                 f'<p style="text-align: center; font-size: 1.2rem;">Sentence {st.session_state.current_index + 1} of {total}</p>',
                 unsafe_allow_html=True
             )
-        
+
         with col3:
-            if st.button("Next ▶", 
-                        disabled=st.session_state.current_index == len(st.session_state.video_paths) - 1,
-                        key="next_button"):
+            if st.button("Next ▶",
+                         disabled=st.session_state.current_index == len(st.session_state.video_paths) - 1,
+                         key="next_button"):
                 st.session_state.current_index += 1
 
     def run(self):
         """Main application loop"""
-        st.markdown('<h1 class="main-title">Interactive Story Signing</h1>', unsafe_allow_html=True)
-        
+        st.markdown('<h1 class="main-title">Interactive Story Telling</h1>', unsafe_allow_html=True)
+
         # Theme selection
         theme = st.sidebar.selectbox("Choose Theme", ["Light", "Dark"])
         st.session_state.theme = theme.lower()
-        
+
         # Language selection with expanded language support
         SUPPORTED_LANGUAGES = {
             'English': 'en',
@@ -624,10 +630,11 @@ class StorySignConverter:
             'Indonesian': 'id',
             'Malay': 'ms'
         }
-        
+
         # Group languages by region
         LANGUAGE_GROUPS = {
-            'Indian Languages': ['Hindi', 'Tamil', 'Telugu', 'Kannada', 'Malayalam', 'Marathi', 'Bengali', 'Gujarati', 'Punjabi', 'Urdu'],
+            'Indian Languages': ['Hindi', 'Tamil', 'Telugu', 'Kannada', 'Malayalam', 'Marathi', 'Bengali', 'Gujarati',
+                                 'Punjabi', 'Urdu'],
             'East Asian': ['Chinese (Simplified)', 'Chinese (Traditional)', 'Japanese', 'Korean'],
             'European': ['English', 'Spanish', 'French', 'German', 'Italian', 'Portuguese', 'Russian'],
             'Middle Eastern': ['Arabic', 'Persian'],
@@ -640,60 +647,95 @@ class StorySignConverter:
             "Select Language Group",
             list(LANGUAGE_GROUPS.keys())
         )
-        
+
         selected_lang = st.sidebar.selectbox(
             "Select Input Language",
             LANGUAGE_GROUPS[language_group],
             index=0
         )
-        
+
         st.session_state.selected_language = SUPPORTED_LANGUAGES[selected_lang]
-        
+
         # Language info display
         st.sidebar.markdown(f"""
         **Current Language**: {selected_lang}  
         **Language Code**: {st.session_state.selected_language}
         """)
-        
+
         # Debug information in sidebar
         if st.sidebar.checkbox("Show Debug Information"):
             st.sidebar.write("### Loaded Resources:")
             st.sidebar.write(f"Total resources: {len(self.resources)}")
             st.sidebar.write("Available characters:", sorted(self.resources.keys()))
-        
+
         # Story input section
         st.markdown('<div class="story-container">', unsafe_allow_html=True)
-        
+
         # Default stories
         DEFAULT_STORIES = {
             "The Lion and the Mouse": "A Lion lay asleep in the forest. A tiny Mouse began running up and down upon him.",
             "The Fox and the Grapes": "One hot summer's day a Fox was strolling through an orchard.",
             "The Tortoise and the Hare": "A Hare was making fun of the Tortoise one day for being so slow."
         }
-        
-        input_method = st.radio("Choose input method:", ["Default Stories", "Custom Text"])
-        
+
+        input_method = st.radio("Choose input method:", ["Default Stories", "Custom Text","Tell the Story"])
+
         if input_method == "Default Stories":
             story_title = st.selectbox("Select a story:", list(DEFAULT_STORIES.keys()))
             if st.button("Load Story", key="load_story"):
                 with st.spinner("Processing story..."):
                     self.process_story(DEFAULT_STORIES[story_title])
                 st.success("Story processed successfully!")
-        else:
+        elif input_method == "Custom Text":
             text_input = st.text_area("Enter your text:", height=150)
             if st.button("Process Text", key="process_text") and text_input:
                 with st.spinner("Processing text..."):
                     self.process_story(text_input)
                 st.success("Text processed successfully!")
-        
+        elif input_method == "Tell the Story":
+            st.subheader("🎙️ Speak Your Story")
+
+            import speech_recognition as sr
+
+            def transcribe_speech():
+                """Record audio from the microphone and transcribe it to text"""
+                recognizer = sr.Recognizer()
+
+                with sr.Microphone() as source:
+                    st.write("🎤 **Listening... Speak now!**")
+                    recognizer.adjust_for_ambient_noise(source)  # Helps with background noise
+                    audio = recognizer.listen(source)
+
+                    try:
+                        text = recognizer.recognize_google(audio)
+                        st.success(f"✅ **Transcribed Text:** {text}")
+                        return text
+                    except sr.UnknownValueError:
+                        st.error("⚠️ Could not understand the audio.")
+                        return None
+                    except sr.RequestError:
+                        st.error("⚠️ Speech recognition service error.")
+                        return None
+
+            if st.button("Start Recording", key="record"):
+                transcribed_text = transcribe_speech()
+                if transcribed_text:
+                    self.process_story(transcribed_text)
+
+            # Display transcribed text after recording
+            if "story_text" in st.session_state:
+                st.write("📜 **Captured Story:**", st.session_state["story_text"])
+                self.process_story(st.session_state["story_text"])
+
         st.markdown('</div>', unsafe_allow_html=True)
-        
+
         # Display section
         if st.session_state.video_paths:
             st.markdown('<div class="story-container">', unsafe_allow_html=True)
             self.display_video_with_audio()
             self.display_navigation()
             st.markdown('</div>', unsafe_allow_html=True)
+
 
 if __name__ == "__main__":
     app = StorySignConverter()
